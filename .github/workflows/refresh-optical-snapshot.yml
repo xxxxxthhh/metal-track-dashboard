@@ -1,0 +1,37 @@
+name: Refresh Optical Snapshot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '10 1 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Refresh snapshot
+        run: npm run refresh:optical-snapshot
+
+      - name: Commit and push changes
+        run: |
+          if git diff --quiet -- src/data/opticalCableSnapshot.ts; then
+            echo "No snapshot changes."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/data/opticalCableSnapshot.ts
+          git commit -m "chore: refresh optical cable snapshot"
+          git push

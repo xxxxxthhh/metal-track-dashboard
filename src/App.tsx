@@ -4,7 +4,7 @@ import { ComparisonChart } from './components/ComparisonChart'
 import { LineChart } from './components/LineChart'
 import { PriceCard } from './components/PriceCard'
 import { RangeSelector } from './components/RangeSelector'
-import { fetchJson } from './lib/api'
+import { buildApiUrl, fetchJson } from './lib/api'
 import { ETF_HINTS } from './lib/etfInfo'
 import type { EtfHistoryResponse, EtfQuotesResponse, HistoricalPoint, MetalId, MetalsSpotResponse, RangeId } from './lib/types'
 import { cn, formatCurrency, formatNumber, formatPercent } from './lib/ui'
@@ -24,6 +24,7 @@ const METAL_WINDOW_SECONDS: Record<MetalWindowId, number> = {
 const METAL_SERIES_STORAGE_KEY = 'metals:session-series:v1'
 const MAX_METAL_POINTS_PER_SERIES = 10_000
 const METAL_SERIES_RETENTION_SECONDS = 8 * 24 * 60 * 60
+const APP_BASE = import.meta.env.BASE_URL
 
 function emptyMetalSeries(): Record<MetalId, HistoricalPoint[]> {
 	return { gold: [], silver: [], platinum: [], palladium: [] }
@@ -61,6 +62,40 @@ function loadMetalSeriesFromStorage(): Record<MetalId, HistoricalPoint[]> {
 	}
 }
 
+function mergeMetalSeries(
+	prev: Record<MetalId, HistoricalPoint[]>,
+	snapshot: MetalsSpotResponse['metals'],
+	serverTime?: number,
+): Record<MetalId, HistoricalPoint[]> {
+	let next: Record<MetalId, HistoricalPoint[]> | null = null
+	const nowSeconds = Math.floor((serverTime ?? Date.now()) / 1000)
+	const minTime = nowSeconds - METAL_SERIES_RETENTION_SECONDS
+
+	for (const metal of METALS) {
+		const spot = snapshot[metal]
+		if (!spot || !Number.isFinite(spot.price)) continue
+		const timeSeconds = Math.floor((spot.timestamp || serverTime || Date.now()) / 1000)
+		const point: HistoricalPoint = { time: timeSeconds, value: spot.price }
+
+		const existing = prev[metal]
+		const last = existing[existing.length - 1]
+		let updated = existing
+		if (!last || last.time < point.time) {
+			updated = [...existing, point]
+		} else if (last.time === point.time && last.value !== point.value) {
+			updated = [...existing.slice(0, -1), point]
+		}
+
+		if (updated !== existing) {
+			updated = updated.filter((p) => p.time >= minTime).slice(-MAX_METAL_POINTS_PER_SERIES)
+			if (!next) next = { ...prev }
+			next[metal] = updated
+		}
+	}
+
+	return next ?? prev
+}
+
 type AssetId = (typeof ETF_SYMBOLS)[number] | (typeof METALS)[number]
 
 export default function App() {
@@ -72,22 +107,18 @@ export default function App() {
 		loadMetalSeriesFromStorage(),
 	)
 
-  const metals = useSWR<MetalsSpotResponse>('/api/metals/spot', fetchJson, { refreshInterval: 60_000 })
+  const metals = useSWR<MetalsSpotResponse>('/api/metals/spot', fetchJson, {
+    refreshInterval: 60_000,
+    onSuccess: (data) => {
+      if (!data?.metals) return
+      setMetalSessionSeries((prev) => mergeMetalSeries(prev, data.metals, data.serverTime))
+    },
+  })
   const etfs = useSWR<EtfQuotesResponse>('/api/etfs/quotes', fetchJson, { refreshInterval: 60_000 })
 
 	const isEtf = useMemo(() => ETF_SYMBOLS.includes(selectedAsset as (typeof ETF_SYMBOLS)[number]), [selectedAsset])
 	const isMetal = useMemo(() => METALS.includes(selectedAsset as (typeof METALS)[number]), [selectedAsset])
 	const metalWindowSeconds = useMemo(() => METAL_WINDOW_SECONDS[metalWindow], [metalWindow])
-
-	useEffect(() => {
-		const id = String(selectedAsset)
-		const valid = (ETF_SYMBOLS as readonly string[]).includes(id) || (METALS as readonly string[]).includes(id)
-		if (!valid) setSelectedAsset('GLD')
-	}, [selectedAsset])
-
-	useEffect(() => {
-		setCompareSymbols((prev) => prev.filter((s) => (ETF_SYMBOLS as readonly string[]).includes(s)))
-	}, [])
 
 	const historyKey = isEtf ? ['/api/etfs/history', selectedAsset, range] : null
 	const history = useSWR<EtfHistoryResponse>(
@@ -95,41 +126,6 @@ export default function App() {
 		async () => fetchJson(`/api/etfs/history?symbol=${encodeURIComponent(String(selectedAsset))}&range=${range}`),
 		{ revalidateOnFocus: false },
 	)
-
-	useEffect(() => {
-		const snapshot = metals.data?.metals
-		if (!snapshot) return
-
-		setMetalSessionSeries((prev) => {
-			let next: Record<MetalId, HistoricalPoint[]> | null = null
-			const nowSeconds = Math.floor(Date.now() / 1000)
-			const minTime = nowSeconds - METAL_SERIES_RETENTION_SECONDS
-
-			for (const metal of METALS) {
-				const spot = snapshot[metal]
-				if (!spot || !Number.isFinite(spot.price)) continue
-				const timeSeconds = Math.floor((spot.timestamp || metals.data?.serverTime || Date.now()) / 1000)
-				const point: HistoricalPoint = { time: timeSeconds, value: spot.price }
-
-				const existing = prev[metal]
-				const last = existing[existing.length - 1]
-				let updated = existing
-				if (!last || last.time < point.time) {
-					updated = [...existing, point]
-				} else if (last.time === point.time && last.value !== point.value) {
-					updated = [...existing.slice(0, -1), point]
-				}
-
-				if (updated !== existing) {
-					updated = updated.filter((p) => p.time >= minTime).slice(-MAX_METAL_POINTS_PER_SERIES)
-					if (!next) next = { ...prev }
-					next[metal] = updated
-				}
-			}
-
-			return next ?? prev
-		})
-	}, [metals.data])
 
 	useEffect(() => {
 		if (typeof window === 'undefined') return
@@ -140,8 +136,7 @@ export default function App() {
 		}
 	}, [metalSessionSeries])
 
-  const serverTime =
-    etfs.data?.serverTime ?? metals.data?.serverTime ?? (etfs.isLoading || metals.isLoading ? undefined : Date.now())
+  const serverTime = etfs.data?.serverTime ?? metals.data?.serverTime
   const stale = Boolean(etfs.data?._stale || metals.data?._stale)
 
 	const cards = useMemo(() => {
@@ -200,7 +195,9 @@ export default function App() {
 		if (!isMetal) return []
 		const metal = selectedAsset as (typeof METALS)[number]
 		const all = metalSessionSeries[metal]
-		const cutoff = Math.floor(Date.now() / 1000) - metalWindowSeconds
+		const latestSampleTime = all[all.length - 1]?.time
+		if (!latestSampleTime) return all
+		const cutoff = latestSampleTime - metalWindowSeconds
 		return all.filter((p) => p.time >= cutoff)
 	}, [isMetal, metalSessionSeries, metalWindowSeconds, selectedAsset])
 
@@ -243,7 +240,13 @@ export default function App() {
             <RangeSelector value={range} onChange={setRange} />
             <a
               className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel)] px-3 py-2 text-sm shadow-sm backdrop-blur transition hover:-translate-y-[1px] hover:bg-white"
-              href="/api/status"
+              href={`${APP_BASE}?view=optical-cable`}
+            >
+              光缆行情页
+            </a>
+            <a
+              className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel)] px-3 py-2 text-sm shadow-sm backdrop-blur transition hover:-translate-y-[1px] hover:bg-white"
+              href={buildApiUrl('/api/status')}
               target="_blank"
               rel="noreferrer"
             >

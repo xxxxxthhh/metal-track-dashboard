@@ -1,7 +1,11 @@
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
+export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
+
+export function buildApiUrl(path: string): string {
+	return `${API_BASE}${path}`
+}
 
 export async function fetchJson<T>(path: string): Promise<T> {
-	const res = await fetch(`${API_BASE}${path}`, {
+	const res = await fetch(buildApiUrl(path), {
 		headers: {
 			Accept: 'application/json',
 		},
