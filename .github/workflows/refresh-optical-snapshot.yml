@@ -3,7 +3,11 @@ name: Refresh Optical Snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: '10 1 * * *'
+    # GitHub Actions uses UTC:
+    # 03:35 UTC = 11:35 Beijing (A股午盘后)
+    # 07:10 UTC = 15:10 Beijing (A股收盘后)
+    - cron: '35 3 * * 1-5'
+    - cron: '10 7 * * 1-5'
 
 permissions:
   contents: write
