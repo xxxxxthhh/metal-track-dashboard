@@ -177,28 +177,45 @@ const STOCKS = [
 	},
 ]
 
-const FIELDS = ['f12', 'f14', 'f2', 'f3', 'f4', 'f5', 'f6', 'f8', 'f9', 'f20', 'f21', 'f23', 'f24', 'f25', 'f26', 'f115', 'f124']
-const SOURCE_NOTE = 'Eastmoney push2 quote API'
+const SOURCE_NOTE = 'Tencent quote API (qt.gtimg.cn)'
 
-const quoteUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?fields=${FIELDS.join(',')}&secids=${STOCKS.map((item) => item.secid).join(',')}`
+const tencentSymbols = STOCKS.map((item) => `${item.exchange === 'SH' ? 'sh' : 'sz'}${item.code}`).join(',')
+const quoteUrl = `https://qt.gtimg.cn/q=${tencentSymbols}`
 
-function toNumber(raw) {
-	if (raw == null || raw === '-') return null
+function toNumber(raw, fallback = 0) {
+	if (raw == null || raw === '' || raw === '-') return fallback
 	const value = Number(raw)
-	return Number.isFinite(value) ? value : null
+	return Number.isFinite(value) ? value : fallback
 }
 
-function toDiv100(raw) {
-	const value = toNumber(raw)
-	if (value == null) return 0
-	return Math.round(value) / 100
+function parseTencentQuoteTimestamp(raw) {
+	const text = String(raw || '')
+	if (!/^\d{14}$/.test(text)) return 0
+	const yyyy = text.slice(0, 4)
+	const mm = text.slice(4, 6)
+	const dd = text.slice(6, 8)
+	const hh = text.slice(8, 10)
+	const mi = text.slice(10, 12)
+	const ss = text.slice(12, 14)
+	const date = new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+08:00`)
+	return Number.isFinite(date.getTime()) ? Math.floor(date.getTime() / 1000) : 0
 }
 
-function toFixedNumber(raw, digits = 2) {
-	const value = toNumber(raw)
-	if (value == null) return 0
-	const multiplier = 10 ** digits
-	return Math.round(value * multiplier) / multiplier
+function parseTencentPayload(text) {
+	const lines = text
+		.split(';')
+		.map((line) => line.trim())
+		.filter(Boolean)
+	const byCode = new Map()
+
+	for (const line of lines) {
+		const match = line.match(/^v_(?:sh|sz)(\d{6})="(.*)"$/)
+		if (!match) continue
+		const code = match[1]
+		const fields = match[2].split('~')
+		byCode.set(code, fields)
+	}
+	return byCode
 }
 
 function renderTypeScript(items, generatedAt, quoteEpochSeconds) {
@@ -238,26 +255,15 @@ export const OPTICAL_CABLE_SNAPSHOT = {
 }
 
 async function main() {
-	const response = await fetch(quoteUrl, {
-		redirect: 'follow',
-		headers: {
-			'User-Agent': 'Mozilla/5.0',
-			Accept: 'application/json,text/plain,*/*',
-		},
-	})
+	const response = await fetch(quoteUrl, { redirect: 'follow' })
 	if (!response.ok) {
 		throw new Error(`行情请求失败: ${response.status} ${response.statusText}`)
 	}
-	const payload = await response.json()
-	const rows = payload?.data?.diff
-	if (!Array.isArray(rows)) {
-		throw new Error('行情响应格式异常：缺少 data.diff')
-	}
-
-	const byCode = new Map(rows.map((row) => [String(row.f12), row]))
+	const rawText = new TextDecoder('gb18030').decode(Buffer.from(await response.arrayBuffer()))
+	const byCode = parseTencentPayload(rawText)
 	const items = STOCKS.map((stock) => {
-		const row = byCode.get(stock.code)
-		if (!row) {
+		const fields = byCode.get(stock.code)
+		if (!fields) {
 			throw new Error(`缺少标的行情: ${stock.code}`)
 		}
 
@@ -267,24 +273,22 @@ async function main() {
 			exchange: stock.exchange,
 			layer: stock.layer,
 			role: stock.role,
-			price: toDiv100(row.f2),
-			change: toDiv100(row.f4),
-			changePct: toDiv100(row.f3),
-			return60d: toDiv100(row.f24),
-			returnYtd: toDiv100(row.f25),
-			turnoverRate: toDiv100(row.f8),
-			peTtm: toDiv100(row.f115),
-			pb: toDiv100(row.f23),
-			marketCap: toFixedNumber(row.f20, 2),
-			amount: toFixedNumber(row.f6, 2),
+			price: toNumber(fields[3]),
+			change: toNumber(fields[31]),
+			changePct: toNumber(fields[32]),
+			return60d: toNumber(fields[71]),
+			returnYtd: toNumber(fields[62]),
+			turnoverRate: toNumber(fields[38]),
+			peTtm: toNumber(fields[39]),
+			pb: toNumber(fields[46]),
+			marketCap: toNumber(fields[45]) * 100_000_000,
+			amount: toNumber(fields[37]) * 10_000,
 			thesis: stock.thesis,
 			risk: stock.risk,
 		}
 	})
 
-	const quoteEpochSeconds = Math.max(
-		...items.map((_, index) => toNumber(byCode.get(STOCKS[index].code)?.f124) ?? 0),
-	)
+	const quoteEpochSeconds = Math.max(...STOCKS.map((stock) => parseTencentQuoteTimestamp(byCode.get(stock.code)?.[30])))
 	const generatedAt = new Date().toISOString()
 
 	const __dirname = path.dirname(fileURLToPath(import.meta.url))
