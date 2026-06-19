@@ -21,7 +21,7 @@ export type OpticalStock = {
 }
 
 export const OPTICAL_CABLE_SNAPSHOT = {
-	generatedAt: '2026-06-18T08:45:53.346Z',
+	generatedAt: '2026-06-19T05:21:04.087Z',
 	quoteEpochSeconds: 1781770495,
 	currency: 'CNY',
 	dataSource: 'Tencent quote API (qt.gtimg.cn)',
