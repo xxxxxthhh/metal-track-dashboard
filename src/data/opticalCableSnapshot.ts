@@ -21,7 +21,7 @@ export type OpticalStock = {
 }
 
 export const OPTICAL_CABLE_SNAPSHOT = {
-	generatedAt: '2026-11-04T11:30:05.133Z',
+	generatedAt: '2026-11-04T15:20:24.793Z',
 	quoteEpochSeconds: 1793780100,
 	currency: 'CNY',
 	dataSource: 'Tencent quote API (qt.gtimg.cn)',
@@ -251,7 +251,7 @@ export const OPTICAL_CABLE_SNAPSHOT = {
 		"turnoverRate": 1.87,
 		"peTtm": 21.14,
 		"pb": 3.2,
-		"marketCap": 383372000000,
+		"marketCap": 383373000000,
 		"amount": 6564610000,
 		"thesis": "平台型龙头在份额与制造能力上具备长期壁垒。",
 		"risk": "体量大意味着弹性相对小，主题行情中相对收益可能落后。"
